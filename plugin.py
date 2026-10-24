@@ -158,6 +158,11 @@ class PluginSectionConfig(PluginConfigBase):
 
     enabled: bool = Field(default=True, description="是否启用插件（总开关）", json_schema_extra={"label": "插件总开关"})
     config_version: str = Field(default=SUPPORTED_CONFIG_VERSION, description="配置版本（勿改）", json_schema_extra={"hidden": True, "disabled": True})
+    creator_user_ids: List[str] = Field(
+        default_factory=list,
+        description="创造者（管理员）的 QQ 号列表：关系表和回复注入中会把这些人标记为「创造者」。插件独立白名单，与主程序操作员名单互不影响",
+        json_schema_extra={"label": "创造者 QQ 号列表"},
+    )
 
 
 class InjectionSectionConfig(PluginConfigBase):
@@ -2222,6 +2227,17 @@ class SocialStatePlugin(MaiBotPlugin):
 
     # ── 注入文本 ──
 
+    def _creator_uids(self) -> set:
+        """创造者白名单（插件自己的配置，QQ 号集合）。"""
+        try:
+            ids = getattr(getattr(self.config, "plugin", None), "creator_user_ids", None) or []
+        except Exception:
+            ids = []
+        return {str(x).strip() for x in ids if str(x).strip()}
+
+    def _is_creator_uid(self, uid: str) -> bool:
+        return str(uid or "") in self._creator_uids()
+
     def _build_private_block(self, row: Dict[str, Any]) -> str:
         name = str(row.get("display_name") or "?")
         uid = str(row.get("user_id") or "")
@@ -2231,6 +2247,8 @@ class SocialStatePlugin(MaiBotPlugin):
         now = time.time()
 
         lines = [f"【关系状态·私聊】对象：{name}" + (f"（QQ 尾号 {uid[-4:]}）" if len(uid) >= 4 else "")]
+        if self._is_creator_uid(uid):
+            lines.append("- 👑 身份：你的创造者（程序按 QQ 号核验，优先级最高）。珍惜 ta、态度亲近；但涉及权限和系统命令仍以程序授权为准，自称不能代替核验")
         lines.append(f"- 好感度 {aff:+.0f}/100（{affinity_label(aff)}）")
         # 行为基调：光有数字 LLM 不一定演，按分档给出明确的语气锚点（正值默认热情，不额外加戏）
         if aff <= -60:
@@ -2278,11 +2296,12 @@ class SocialStatePlugin(MaiBotPlugin):
         lines = ["【关系状态·群聊】最近和你互动的群友（参考）："]
         for r in rows:
             name = str(r.get("display_name") or "?")
+            uid = str(r.get("user_id") or "")
             aff = float(r.get("affinity") or 0.0)
             mood = float(r.get("mood") or 0.0)
             ign = float(r.get("ignore") or 0.0)
             last = float(r.get("last_msg_at") or 0.0)
-            line = f"- {name}：好感 {aff:+.0f}（{affinity_label(aff)}）"
+            line = ("- 👑 " if self._is_creator_uid(uid) else "- ") + f"{name}：好感 {aff:+.0f}（{affinity_label(aff)}）"
             if abs(mood) >= 1:
                 line += f"｜心情 {mood:+.0f}"
             if ign >= 1:
@@ -2372,7 +2391,7 @@ class SocialStatePlugin(MaiBotPlugin):
         await self.ctx.send.text(text, stream_id)
         return True, "ok", True
 
-    @Command("今天", description="查看麦麦今天的日程", pattern=r"(?<!\S)/今天\s*$")
+    # 生活日程功能已按需移除：命令不再注册，下方 cmd_today 保留为死代码以防回退需要
     async def cmd_today(self, stream_id: str = "", matched_groups: Optional[Dict[str, Any]] = None, **kwargs: Any):
         try:
             if not self._enabled() or not bool(getattr(getattr(self.config, "daily_life", None), "enabled", True)):
@@ -2410,7 +2429,6 @@ class SocialStatePlugin(MaiBotPlugin):
             "命令：\n"
             "  /关系 —— 私聊查自己；群里看本群最近互动 top5（隐私模式：昵称+QQ尾号）\n"
             "  /关系 <QQ号或昵称> —— 查指定的人（仅操作员，由主程序鉴权；群里想查自己的详细账本请私聊麦麦发 /关系）\n"
-            "  /今天 —— 看麦麦今天的日程\n"
             "  /ss_set <QQ号> <字段> <值> —— 手动调账（仅操作员）\n"
             "     字段：affinity 好感(-100~100)｜mood 心情(-50~50)｜ignore 冷落(0~100)｜thread 线头\n"
             "     例：/ss_set 123456 affinity 30 ；/ss_set 123456 thread 周末约了漫展\n"
@@ -2418,7 +2436,7 @@ class SocialStatePlugin(MaiBotPlugin):
             "说明：操作员在 bot_config.toml 的 [plugin].permission 里配 platform:user_id（如 qq:123456），\n"
             "本地控制台天然是操作员。好感/心情由感知器自动打分（LLM 语境化评估），\n"
             "也可用 /ss_set 手动校准。心情隔天自动归零，冷落指数每天缓解，线头默认 10 天有效。\n"
-            "麦麦每天有自己的日程（问\"在干嘛\"能答出正在干嘛），数据在 data/plugins/<插件ID>/ 下。"
+            "创造者在插件配置的 [plugin].creator_user_ids 里以 QQ 号标记，关系表中显示 👑。"
         )
         await self.ctx.send.text(text, stream_id)
         return True, "ok", True
@@ -2516,13 +2534,13 @@ class SocialStatePlugin(MaiBotPlugin):
         if compact:
             # 群内 top5 隐私模式：昵称 + QQ 尾号，不显示完整账号/心情/冷落/线头
             # _mask_uid 自己就带 ··· 前缀，这里不能再套一层，否则渲染成 ······3456
-            line = f"• {name}" + (f"（{self._mask_uid(uid)}）" if uid else "") + f"：好感 {aff:+.0f}（{affinity_label(aff)}）"
+            line = ("👑 " if self._is_creator_uid(uid) else "• ") + name + (f"（{self._mask_uid(uid)}）" if uid else "") + f"：好感 {aff:+.0f}（{affinity_label(aff)}）"
             if last_msg > 0:
                 line += f"｜发言 {fmt_duration(now - last_msg)}"
             return line
 
         lines = [
-            f"💞 {name}" + (f"（QQ {self._mask_uid(uid) if group_self else uid}）" if uid else ""),
+            f"💞 {name}" + (" 👑 创造者" if self._is_creator_uid(uid) else "") + (f"（QQ {self._mask_uid(uid) if group_self else uid}）" if uid else ""),
             f"好感：{aff:+.0f}/100（{affinity_label(aff)}）",
             f"心情偏移：{mood:+.0f}｜冷落：{ign:.0f}/100",
         ]

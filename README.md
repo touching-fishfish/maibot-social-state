@@ -1,3 +1,21 @@
+## Alan 分享版
+
+这是 [原项目](https://github.com/ZhaoCang-QWQ/social-state) 的本地补丁分享版，原作者和许可证保留。
+
+按可配置 QQ 白名单标记创造者，移除 /今天 命令及帮助入口。日程开关仍须自行关闭。
+
+安装时使用本仓库的默认分支 `alan-local`：
+
+```sh
+git clone --branch alan-local https://github.com/touching-fishfish/maibot-social-state.git
+```
+
+将克隆的插件文件夹放入 MaiBot 的 `plugins/`，按下方原版说明安装依赖、填写自己的配置，重启 MaiBot 后启用。
+
+本仓库只带源码和通用配置示例；API 密钥、参考音频、模型权重和个人数据须自行配置。[本地补丁与验证范围](LOCAL_CHANGES.md)。
+
+---
+
 # 关系状态表（social_state）
 
 > 给麦麦的每个联系人记一本账——好感、心情、冷落、话题线头、人物关系边，全部由 LLM 语境化自动维护。麦麦从此知道"谁是谁、关系怎么样、上次聊到哪"，并且克制得像个真人。
